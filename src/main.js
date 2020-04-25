@@ -596,11 +596,6 @@ function swapSmallPane(fromIndex, toIndex) {
   const settings = loadSettings();
   const fromPane = document.getElementById(fromIndex);
   const toPane = document.getElementById(toIndex);
-  const fromWebview = fromPane.querySelector("webview");
-  const toWebView = toPane.querySelector("webview");
-
-  // 両ペインの現在開いているURLを交換
-  // [fromWebview.src, toWebView.src] = [toWebView.src, fromWebview.src];
 
   // 両ペインの定義済み設定を交換
   storeUrl(fromIndex, settings.contents[toIndex]["url"]);
@@ -611,8 +606,12 @@ function swapSmallPane(fromIndex, toIndex) {
   storeCustomCSS(toIndex, settings.contents[fromIndex]["customCSS"]);
 
   // ペインのIDと表示位置を交換
-  [fromPane.style.order, toPane.style.order] = [toPane.style.order, fromPane.style.order];
-  [fromPane.id, toPane.id] = [toPane.id, fromPane.id];
+  [fromPane.id, fromPane.style.order, toPane.id, toPane.style.order] = [
+    toPane.id,
+    toPane.id,
+    fromPane.id,
+    fromPane.id
+  ];
 
   // ボタンの描画もし直す
   refreshButtons();
