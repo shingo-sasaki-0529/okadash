@@ -742,7 +742,7 @@ function getPaneNum() {
 function loadAdditionalPage({ url, zoom = 1.0, customCSS = [] }) {
   resetWindowSize();
   const size = "small";
-  createPane({ size, url: additionalPage, customCSS });
+  createPane({ size, url, zoom, customCSS });
   storeSize(getPaneNum() - 1, size);
   storeUrl(getPaneNum() - 1, url);
   storeZoom(getPaneNum() - 1, zoom);
@@ -772,7 +772,7 @@ function recreateSelectedPane(index, { url, zoom, customCSS }) {
   storeCustomCSS(index, customCSS);
   storeZoom(index, zoom);
 
-  const webview = createWebView({ url, customCSS });
+  const webview = createWebView({ url, zoom, customCSS });
   div.appendChild(webview.element);
 }
 
