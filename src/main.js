@@ -7,6 +7,7 @@ const path = require("path");
 const Store = require("electron-store");
 const store = new Store();
 const menu = require("./menu");
+const WebView = require("./components/webView");
 
 /**
  * アプリケーションのバージョン情報
@@ -175,27 +176,25 @@ function initialize() {
   checkConfigVersion();
 
   initializeMenu(menu.menuTemplate);
+
+  // 使用中のボードをStoreから参照し、ペインの初期描画を行う
   const contents = json.contents;
   contents.forEach(function (content) {
     if (content["size"] === undefined) content["size"] = "small";
     if (content["zoom"] === undefined) content["zoom"] = 1.0;
-    createPane(content["size"], content["url"], true);
+    createPane(content, true);
   });
 
-  getWebviews().forEach(function (webview, index) {
+  // 描画されたWebviewにショートカットキーと操作ボタンを追加する
+  getWebviews().forEach(function (webview) {
     webview.addEventListener("dom-ready", function () {
-      initializeWebview({
-        webview,
-        url: json.contents[index]["url"],
-        customCSS: json.contents[index]["customCSS"],
-        zoom: json.contents[index]["zoom"]
-      });
-      if (
-        webview.parentNode.classList.contains("small") &&
-        !webview.previousSibling.hasChildNodes()
-      ) {
+      const isSmallPane = webview.parentNode.classList.contains("small");
+      const hasButtons = webview.previousSibling.hasChildNodes();
+      if (isSmallPane && !hasButtons) {
         addButtons(webview.previousSibling, webview.parentNode.id);
       }
+      addMaximizeButton(webview.parentNode, webview.parentNode.id);
+      addReloadButton(webview.parentNode, webview.parentNode.id);
     });
   });
 }
@@ -329,16 +328,6 @@ function createMenuItemForSmallPane() {
 }
 
 /**
- * 現在定義しているボードの総数を戻す
- */
-function getBoardNum() {
-  if (store.get("options") !== undefined) {
-    return Object.keys(store.get("options")).length;
-  }
-  return undefined;
-}
-
-/**
  * 現在表示しているボードをJSON出力する
  */
 function exportUsingBoard() {
@@ -379,26 +368,6 @@ function writeFile(path, data) {
       return;
     }
   });
-}
-
-/**
- * 現在使用中のボードを削除する
- * FIXME: 使われていないのであれば削除する
- */
-function deleteUsingBoard() {
-  const allBoards = store.get("boards");
-  const allOptions = store.get("options");
-  if (!confirm(`Delete board name '${allBoards[0]["name"]}'. OK?`)) return;
-  for (i in allOptions) {
-    if (allOptions[Number(i) + 1] === undefined) break;
-    allOptions[i] = allOptions[Number(i) + 1];
-    allBoards[i] = allBoards[Number(i) + 1];
-  }
-  allOptions.pop();
-  allBoards.pop();
-  store.set("options", allOptions);
-  store.set("boards", allBoards);
-  remote.getCurrentWindow().reload();
 }
 
 /**
@@ -517,12 +486,8 @@ function openGoogleInOverlay() {
   label.innerHTML = "Press Esc to Close";
   div.appendChild(label);
   main.appendChild(div);
-  const webview = createWebview("https://google.com");
-  webview.addEventListener("dom-ready", function () {
-    initializeWebview({ webview, url: "https://google.com" });
-    webview.focus();
-  });
-  div.appendChild(webview);
+  const webview = createWebView({ url: "https://google.com", forOverlay: true });
+  div.appendChild(webview.element);
 }
 
 /**
@@ -559,56 +524,11 @@ function getWebviews() {
 }
 
 /**
- * Webviewの初期設定を行う
- * @param {Object}   params
- * @param {Element}  params.webview
- * @param {string}   params.url
- * @param {number}   params.zoom
- * @param {[string]} params.customCSS
+ * Overlayを削除する
  */
-function initializeWebview({ webview, url, zoom = 1.0, customCSS = [] }) {
-  registerToOpenUrl(webview, shell);
-  webview.insertCSS(customCSS.join(" "));
-  webview.setZoomFactor(Number(zoom) || 1.0);
-  webview.autosize = "on";
-
-  if (webview.src === "about:blank") {
-    webview.loadURL(url.toString());
-  } else {
-    addKeyEvents(webview);
-    if (!webview.parentNode.classList.contains("overlay")) {
-      addMaximizeButton(webview.parentNode, webview.parentNode.id);
-      addReloadButton(webview.parentNode, webview.parentNode.id);
-    }
-  }
-}
-
-/**
- * Webviewに対してキーボード操作するためのキー設定を追加する
- * @param {Element} webview
- */
-function addKeyEvents(webview) {
-  webview.getWebContents().on("before-input-event", (event, input) => {
-    if (
-      input.meta &&
-      input.key === "w" &&
-      webview.parentNode.classList.contains("small")
-    ) {
-      removeSmallPane(webview.parentNode.id);
-    }
-    if (webview.parentNode.classList.contains("overlay")) {
-      if (input.key === "Escape" || (input.meta && input.key === "w")) {
-        const main = document.getElementById("main-content");
-        main.removeChild(document.getElementsByClassName("overlay")[0]);
-      }
-      if (input.meta && input.key === "[") {
-        webview.goBack();
-      }
-      if (input.meta && input.key === "]") {
-        webview.goForward();
-      }
-    }
-  });
+function removeOverlay() {
+  const main = document.getElementById("main-content");
+  main.removeChild(document.getElementsByClassName("overlay")[0]);
 }
 
 /**
@@ -713,11 +633,8 @@ function maximize(index) {
   label.innerHTML = "Press Esc to Close";
   div.appendChild(label);
   main.appendChild(div);
-  const webview = createWebview(url);
-  webview.addEventListener("dom-ready", function () {
-    initializeWebview({ webview, url });
-  });
-  div.appendChild(webview);
+  const webview = createWebView({ url, forOverlay: true });
+  div.appendChild(webview.element);
 }
 
 /**
@@ -825,7 +742,7 @@ function getPaneNum() {
 function loadAdditionalPage({ url, zoom = 1.0, customCSS = [] }) {
   resetWindowSize();
   const size = "small";
-  createPane(size, "");
+  createPane({ size, url: additionalPage, customCSS });
   storeSize(getPaneNum() - 1, size);
   storeUrl(getPaneNum() - 1, url);
   storeZoom(getPaneNum() - 1, zoom);
@@ -833,7 +750,8 @@ function loadAdditionalPage({ url, zoom = 1.0, customCSS = [] }) {
 
   const webview = getWebviews()[getPaneNum() - 1];
   webview.addEventListener("dom-ready", function () {
-    initializeWebview({ webview, url, customCSS });
+    addMaximizeButton(webview.parentNode, webview.parentNode.id);
+    addReloadButton(webview.parentNode, webview.parentNode.id);
   });
   refreshButtons();
 }
@@ -854,16 +772,8 @@ function recreateSelectedPane(index, { url, zoom, customCSS }) {
   storeCustomCSS(index, customCSS);
   storeZoom(index, zoom);
 
-  const webview = createWebview(url);
-  webview.autosize = "on";
-  webview.addEventListener("dom-ready", function () {
-    if (webview.src === "about:blank") {
-      webview.loadURL(url.toString());
-    }
-    webview.insertCSS(customCSS.join(" "));
-  });
-  webview.src = "about:blank";
-  div.appendChild(webview);
+  const webview = createWebView({ url, customCSS });
+  div.appendChild(webview.element);
 }
 
 /**
@@ -904,19 +814,22 @@ function storeCustomCSS(index, customCSS) {
 
 /**
  * 新規ペインを描画する
- * @param {string}  size
- * @param {string}  url
- * @param {boolean} init 初期描画による作成であるか
+ * @param {Object}   params
+ * @param {string}   params.size
+ * @param {number}   params.zoom
+ * @param {[string]} params.customCSS
+ * @param {boolean}  init  初期描画による作成であるか
  */
-function createPane(size, url = "", init = false) {
+function createPane({ size, url, zoom, customCSS }, init = false) {
   let divContainer = createContainerDiv(size);
   let divButtons = createButtonDiv();
 
   document.getElementById("main-content").appendChild(divContainer);
   divContainer.appendChild(divButtons);
 
-  const webview = createWebview(url);
-  divContainer.appendChild(webview);
+  const forSmallPane = size === "small";
+  const webview = createWebView({ url, zoom, customCSS, forSmallPane });
+  divContainer.appendChild(webview.element);
 
   createDraggableBar(size);
   calcWindowSize(init);
@@ -964,87 +877,6 @@ function createButtonDiv() {
 }
 
 /**
- * Webview要素を新規生成する
- * @param {string} url
- */
-function createWebview(url = "") {
-  let webview = document.createElement("webview");
-  webview.src = "about:blank";
-  webview.id = "normal";
-  webview.url = url;
-  return webview;
-}
-
-/**
- * webview内のリンクはアプリケーション外で開くように設定する
- * @param {Element} webview
- */
-function registerToOpenUrl(webview) {
-  webview.removeEventListener("new-window", openExternalUrl);
-  webview.addEventListener("new-window", openExternalUrl);
-}
-
-/**
- * リンクをアプリケーション外で開く
- * @param {any} event 開こうとしているURLを持っているイベント
- */
-function openExternalUrl(event) {
-  const url = event.url;
-  if (
-    url.startsWith("http://") ||
-    url.startsWith("https://") ||
-    url.startsWith("file://")
-  ) {
-    shell.openExternal(url);
-  }
-}
-
-/**
- * JSONファイルの内容を元に、ボードをインポートする
- * TODO: 使われていないのであれば削除する
- * @param {string} jsonPath
- * @param {string} boardName
- */
-function saveJson(jsonPath, boardName) {
-  const settings = JSON.parse(fs.readFileSync(jsonPath));
-  if (!validateJson(settings)) {
-    return null;
-  }
-
-  const newOption = { name: boardName, contents: settings["contents"] };
-  let optList = store.get("options");
-  let brdList = store.get("boards");
-  if (optList) {
-    optList.push(newOption);
-    brdList.push(newOption);
-    store.set(`options`, optList);
-    store.set(`boards`, brdList);
-  } else {
-    store.set(`options`, [newOption]);
-    store.set(`boards`, [newOption]);
-  }
-  let index = getBoardNum();
-  if (index === undefined) index = 0;
-  if (index === 0) {
-    remote.getCurrentWindow().reload();
-  } else {
-    moveClickedContentsToTop(index);
-  }
-}
-
-function validateJson(jsonObj) {
-  if (!jsonObj.contents) {
-    alert("Error in settings: contents is invalid");
-    return false;
-  }
-  jsonObj.contents.forEach(function (content) {
-    if (content["customCSS"] === undefined) content["customCSS"] = [];
-  });
-
-  return true;
-}
-
-/**
  * storeを元に初期描画するボードのオブジェクトを生成する
  */
 function loadSettings() {
@@ -1054,6 +886,26 @@ function loadSettings() {
   }
 
   return buildJsonObjectFromStoredData(store.get("boards")[0]);
+}
+
+/**
+ * Webviewオブジェクトを生成する
+ * @param {Object}   params
+ * @param {string}   params.url
+ * @param {number}   params.zoom
+ * @param {[string]} params.customCSS
+ * @param {boolean}  params.forOverlay   オーバレイ用途であるか
+ * @param {boolean}  params.forSmallPane smallペイン用途であるか
+ */
+function createWebView({ url, zoom, customCSS, forOverlay, forSmallPane }) {
+  const webview = new WebView({ url, zoom, customCSS });
+  if (forOverlay) {
+    webview.addShortcutKey("Escape", _ => removeOverlay());
+    webview.addShortcutKey("meta+w", _ => removeOverlay());
+  } else if (forSmallPane) {
+    webview.addShortcutKey("meta+w", webview => removeSmallPane(webview.parentNode.id));
+  }
+  return webview;
 }
 
 /**
@@ -1068,55 +920,6 @@ function checkConfigVersion() {
       ipcRenderer.send("initial-open");
     });
   }
-}
-
-/**
- * ファイルパスを元に、ボード名入力ダイアログを表示し、インポートする
- * TODO: 使われていないのであれば削除する
- * @param {string} filePath
- */
-function showModalDialogElement(filePath) {
-  return new Promise((resolve, reject) => {
-    const dlg = document.querySelector("#input-dialog");
-    dlg.addEventListener("cancel", event => {
-      event.preventDefault();
-    });
-    dlg.showModal();
-    function onClose() {
-      if (dlg.returnValue === "ok") {
-        const inputValue = document.querySelector("#input").value;
-        resolve(saveJson(filePath, inputValue));
-      } else {
-        reject();
-      }
-    }
-    dlg.addEventListener("close", onClose, { once: true });
-  });
-}
-
-/**
- * ファイル選択ダイアログを開き、選択されたファイルを元にボードを描画する
- * TODO: 使われていないのであれば削除する
- */
-function openFileAndSave() {
-  const win = remote.getCurrentWindow();
-  remote.dialog.showOpenDialog(
-    win,
-    {
-      properties: ["openFile"],
-      filters: [
-        {
-          name: "settings",
-          extensions: ["json"]
-        }
-      ]
-    },
-    filePath => {
-      if (filePath) {
-        showModalDialogElement(filePath[0]);
-      }
-    }
-  );
 }
 
 /**
@@ -1217,48 +1020,5 @@ function calcWindowSize(init = false) {
     store.set("boards.0.contents.0.width", configWidth);
     store.set("boards.0.contents.0.allWidth", columns);
     store.set("boards.0.contents.1.height", configHeight);
-  }
-}
-
-var savedLargeWidth = document.getElementById("0").clientWidth;
-
-/**
- * largeペインを折りたたむ
- * FIXME: 使われていないのであれば削除する
- */
-function foldLargePane() {
-  const largeWidth = document.getElementById("0").clientWidth;
-  const smallPanes = Array.from(document.getElementsByClassName("small"));
-  let newWidth = 700;
-  if (smallPanes.length !== 0) {
-    var nextPaneLen = largeWidth;
-    smallPanes.forEach(function (pane) {
-      if (pane.id <= 2) nextPaneLen += pane.clientWidth;
-    });
-  }
-  draggingBoarder.id = "0";
-  if (
-    savedLargeWidth === 0 ||
-    savedLargeWidth === nextPaneLen ||
-    savedLargeWidth === 700
-  ) {
-    savedLargeWidth = largeWidth;
-    $("#0").css("width", 160);
-    $("#2").css("width", nextPaneLen - 160);
-    savedLargeWidth = 160;
-    calcWindowSize();
-  } else if (savedLargeWidth === 160) {
-    if (nextPaneLen <= 700) {
-      newWidth = nextPaneLen;
-    }
-    $("#0").css("width", newWidth);
-    $("#2").css("width", nextPaneLen - newWidth);
-    calcWindowSize();
-    savedLargeWidth = newWidth;
-  } else {
-    $("#0").css("width", savedLargeWidth);
-    $("#2").css("width", nextPaneLen - savedLargeWidth);
-    calcWindowSize();
-    savedLargeWidth = 0;
   }
 }
